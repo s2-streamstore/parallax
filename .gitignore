@@ -1,0 +1,9 @@
+target/
+
+# Test artifacts from runs
+*.pyc
+__pycache__/
+.pytest_cache/
+.coverage
+calc-app/
+todo-api/
