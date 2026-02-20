@@ -87,6 +87,18 @@ pub enum Command {
         #[arg(long, default_value = "30")]
         max_messages: usize,
 
+        /// Optional cap on moderator-created streams (0 disables dynamic stream creation)
+        #[arg(long)]
+        max_dynamic_streams: Option<usize>,
+
+        /// Maximum number of moderator phase transitions before forced conclude
+        #[arg(long, default_value = "3")]
+        max_phase_transitions: usize,
+
+        /// Wall-clock timeout in minutes for the research run (force conclude on expiry)
+        #[arg(long)]
+        timeout: Option<u64>,
+
         /// Agent backend
         #[arg(long, default_value = "claude")]
         agent: String,
