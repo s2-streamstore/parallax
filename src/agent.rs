@@ -53,13 +53,21 @@ impl AgentBackend {
                 if !model.is_empty() {
                     args.extend_from_slice(&["--model", model]);
                 }
-                let output = Command::new("claude")
+                let child = Command::new("claude")
                     .args(&args)
                     .env_remove("CLAUDECODE")
-                    .output()
-                    .await
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()
                     .map_err(|e| {
                         OrchestratorError::Worker(format!("Failed to run claude: {e}"))
+                    })?;
+                let output = child
+                    .wait_with_output()
+                    .await
+                    .map_err(|e| {
+                        OrchestratorError::Worker(format!("Failed to wait on claude: {e}"))
                     })?;
 
                 if !output.status.success() {
@@ -81,7 +89,7 @@ impl AgentBackend {
                     format!("{}\n\n{}", system, user_message)
                 };
 
-                let output = Command::new("codex")
+                let child = Command::new("codex")
                     .args([
                         "-a",
                         "never",
@@ -93,8 +101,10 @@ impl AgentBackend {
                         "never",
                         &full_prompt,
                     ])
-                    .output()
-                    .await
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()
                     .map_err(|e| {
                         if e.kind() == std::io::ErrorKind::NotFound {
                             OrchestratorError::Executor(ExecutorError::CodexNotFound)
@@ -102,6 +112,10 @@ impl AgentBackend {
                             OrchestratorError::Executor(ExecutorError::CodexSpawn(e))
                         }
                     })?;
+                let output = child
+                    .wait_with_output()
+                    .await
+                    .map_err(|e| OrchestratorError::Executor(ExecutorError::CodexSpawn(e)))?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
