@@ -1432,6 +1432,7 @@ dependencies = [
  "dirs",
  "futures",
  "hostname",
+ "libc",
  "miette",
  "reqwest 0.12.28",
  "s2-sdk",
