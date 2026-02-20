@@ -1,7 +1,7 @@
 ---
 name: research
 description: Run a Parallax multi-agent research session. Handles pre-checks, builds the binary, and executes the research with sensible defaults.
-argument-hint: "<question>" [--hint "..."] [--groups N] [--agents N] [--timeout M]
+argument-hint: "<question>" [--hint "..."] [--groups N] [--agents-per-group N] [--max-messages N] [--max-dynamic-streams N] [--max-phase-transitions N] [--timeout M] [--agent claude|codex] [--planner-agent claude|codex] [--model NAME]
 ---
 
 # Parallax Research Skill
@@ -14,17 +14,18 @@ Run ALL of these checks before proceeding. If any fail, stop and tell the user h
 
 ### 1a. Environment Variables
 
-Check that these are set (they're required):
+Check that these are set (or configured in `~/.config/parallax/config.toml`):
 
 ```bash
 echo "S2_ACCESS_TOKEN: ${S2_ACCESS_TOKEN:+SET}"
-echo "ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:+SET}"
 echo "PARALLAX_BASIN: ${PARALLAX_BASIN:+SET}"
+echo "PARALLAX_MODEL: ${PARALLAX_MODEL:+SET}"
 ```
 
 - `S2_ACCESS_TOKEN` - **REQUIRED**. Without this, Parallax cannot connect to S2 streams.
-- `ANTHROPIC_API_KEY` - **REQUIRED**. Used by both the planner (API calls) and spawned Claude agents.
 - `PARALLAX_BASIN` - **REQUIRED** (unless `--basin` is passed). The S2 basin for storing research streams.
+- `PARALLAX_MODEL` - Optional model override for local Claude backend.
+- Backend CLIs (`claude` and/or `codex`) must be installed for whichever planner/agent backend the run uses.
 
 If any are missing, tell the user:
 ```
@@ -47,15 +48,15 @@ cargo build --release 2>&1
 
 If the build fails, show the errors and stop.
 
-### 1c. Disk Space & Process Check
+### 1c. Process Check
 
 ```bash
-# Make sure no orphaned parallax/claude agents from a previous run
-ps aux | grep -E "parallax research" | grep -v grep | head -5
+# Make sure no existing parallax research processes are running
+pgrep -af "parallax research" || true
 ```
 
 If there are existing parallax research processes, **WARN the user**:
-> There's already a parallax research process running (PID XXXX). Running another one simultaneously will spawn many Claude agent processes and could be expensive. Kill it first with `kill XXXX` or wait for it to finish.
+> There's already a parallax research process running (PID XXXX). Running another one simultaneously can spawn many agent processes and may be expensive. Kill it first with `kill <pid>` or wait for it to finish.
 
 ## Step 2: Parse User Intent
 
@@ -81,13 +82,13 @@ Before launching, calculate and display estimates:
 | Parameter | Value | Estimated Impact |
 |---|---|---|
 | Groups | N | N streams created |
-| Agents/group | M | N*M total Claude agent processes |
-| Max messages | X | Up to N*M*X total API calls |
+| Agents/group | M | N*M total agent processes |
+| Max messages | X | Up to N*M*X total model turns |
 | Timeout | T min | Hard stop after T minutes |
 
 ### Warning Thresholds:
 
-- **Total agents > 20**: Warn "This will spawn {N} Claude agent processes simultaneously. Each consumes memory and API credits. Proceed?"
+- **Total agents > 20**: Warn "This will spawn {N} agent processes simultaneously. Each consumes memory and model credits. Proceed?"
 - **Total agents > 40**: Strong warning "This is a large research run ({N} agents). Estimated cost could be significant. Consider reducing groups or agents-per-group."
 - **No timeout set**: Warn "No timeout specified. Adding --timeout 20 as a safety net to prevent runaway costs."
 - **Max messages > 30**: Warn "High message budget ({X}/agent). Total possible messages: {total}. Consider --max-messages 20 for a lighter run."
@@ -99,13 +100,15 @@ Run the research in the background so the user can continue working:
 ```bash
 ./target/release/parallax research \
   "<question>" \
-  --hint "<hint>" \
+  [--hint "<hint>"] \
   -g <groups> \
   -n <agents_per_group> \
   --max-messages <max_messages> \
-  --max-phase-transitions <max_phase_transitions> \
-  --timeout <timeout_minutes> \
   [--max-dynamic-streams <N>] \
+  --max-phase-transitions <max_phase_transitions> \
+  [--timeout <timeout_minutes>] \
+  [--agent <claude|codex>] \
+  [--planner-agent <claude|codex>] \
   [--model <model>] \
   2>&1
 ```
@@ -146,13 +149,14 @@ When the research completes:
 | `S2 connection failed` | Missing/invalid S2_ACCESS_TOKEN | Check token: `echo $S2_ACCESS_TOKEN` |
 | `Basin not found` | Basin doesn't exist | Run `parallax init <basin-name>` first |
 | `Failed to run claude` | Claude CLI not installed/in PATH | Install Claude Code CLI: `npm install -g @anthropic-ai/claude-code` |
-| Process hangs with no output | Planner API call slow (designing complex strategy) | Wait 60-90s; the planner calls Anthropic API to design the strategy |
+| Process hangs with no output | Local planner CLI is slow or waiting on auth | Run `claude` or `codex` directly and verify it's authenticated; retry with `--planner-agent` |
 | `Codex CLI not found` | Hint requested codex agents but codex isn't installed | Install codex or remove codex agent references from hint |
 
 ## Important Notes
 
-- Each Claude agent is a **separate `claude` CLI process** with `--dangerously-skip-permissions`. They can use tools (WebSearch, Bash, etc.)
-- Codex agents run in `--sandbox read-only` mode - they cannot modify files
+- Each Claude agent is a separate `claude` CLI process with tool access.
+- Codex agents run with full local permissions in this integration.
+- Planner uses a local CLI backend (`claude` by default, switch with `--planner-agent codex`).
 - The `--timeout` flag is a **wall-clock safety net** - always set one to prevent runaway sessions
 - Research output is stored durably in S2 streams even after the process exits. Use `parallax watch` to see events.
-- Ctrl+C once = graceful shutdown (waits for current messages). Ctrl+C twice = force kill.
+- Shutdown signals (`Ctrl+C`, terminate/quit/stop signals) trigger coordinated cleanup of spawned agent process groups.

@@ -6,6 +6,7 @@ mod config;
 mod error;
 mod planner;
 mod research;
+mod signal;
 mod status;
 mod streams;
 mod swarm;
