@@ -55,7 +55,7 @@ Return JSON with this structure:
         "name": "Group name (e.g. 'Security Experts', 'Cost Analysts')",
         "prompt": "Detailed prompt for this group's agents",
         "agents": 3,
-        "agent": "claude"  // optional: "claude" (default, has tools), "codex" (sandboxed, good for code review/verification)
+        "agent": "claude"  // optional: "claude" (default, has tools), "codex" (full-permission local executor)
       }
     ]
   },
@@ -134,7 +134,7 @@ CRITICAL JSON SCHEMA RULES:
 
 AGENT BACKENDS:
 - "claude" (default): full tool access (WebSearch, WebFetch, Read, Bash). Best for research, analysis, tool-using investigation.
-- "codex": sandboxed read-only execution. Best for code review, adversarial verification, fact-checking code claims.
+- "codex": full-permission local executor in this integration. Best for verification, code review, and shell-driven investigation.
 - You can mix backends in the same strategy — e.g. Claude groups do research, a Codex group reviews and verifies.
 - Set "agent" on any group to override the default. Omit it to use the session default (claude).
 

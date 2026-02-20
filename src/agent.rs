@@ -86,7 +86,7 @@ impl AgentBackend {
                         "-a",
                         "never",
                         "--sandbox",
-                        "read-only",
+                        "danger-full-access",
                         "exec",
                         "--skip-git-repo-check",
                         "--color",

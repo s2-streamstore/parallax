@@ -140,7 +140,7 @@ parallax research "Audit the auth module for security issues" \
   --groups 2 --agents-per-group 2
 ```
 
-The planner assigns backends per group. Claude agents have full tool access (WebSearch, WebFetch, Bash). Codex agents run in a sandboxed read-only environment, good for code review and verification.
+The planner assigns backends per group. Claude agents have full tool access (WebSearch, WebFetch, Bash). Codex agents run with full permissions in this integration and are useful for verification and implementation-heavy workflows.
 
 ## Commands
 
