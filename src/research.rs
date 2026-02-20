@@ -487,6 +487,40 @@ fn slugify(s: &str) -> String {
         .join("-")
 }
 
+/// Normalize moderator-provided stream names into safe relative paths.
+/// Enforces a collaboration namespace and blocks reserved/synthesis paths.
+fn normalize_stream_name(name: &str) -> Option<String> {
+    let trimmed = name.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lowered = trimmed.to_lowercase();
+    if lowered.contains("synthesis")
+        || lowered.starts_with("moderator")
+        || lowered.starts_with("events")
+        || lowered.starts_with("plan")
+        || lowered.starts_with("join-")
+    {
+        return None;
+    }
+
+    let mut parts = trimmed
+        .split('/')
+        .map(slugify)
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return None;
+    }
+
+    if parts.len() == 1 {
+        Some(format!("group/{}", parts.remove(0)))
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
 pub fn truncate_display(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
@@ -946,12 +980,16 @@ RECENT ACTIVITY:
 PROGRESS: {total}/{max} messages
 
 Your job: read the strategy to understand the intended methodology, then drive the
-research using the actions below. The strategy is your starting point, not a constraint.
-If the research surfaces something unexpected — a promising tangent, a gap that needs
-a new perspective, a methodology that should shift — evolve the topology on the fly.
-You can spawn new streams, rewire context between groups, transition phases, or
-restructure the approach entirely. Every stream is an isolated context; reads_from
-and start_phase are how you control when findings cross boundaries.
+research using the actions below toward convergence and a final document.
+The strategy is your starting point, not a constraint, but you must avoid endless
+debate loops and unnecessary stream growth.
+
+STRICT CONVERGENCE RULES:
+- Prefer steer/wrap_up/conclude over add_stream.
+- Do NOT create any stream with names containing "synthesis" or "moderator".
+- Only use add_stream for genuinely missing perspectives.
+- Once you issue wrap_up, your next action should be conclude.
+- If the budget is beyond ~70%, strongly prefer conclude.
 
 Respond with exactly ONE JSON action:
 
@@ -1070,8 +1108,20 @@ async fn execute_strategy(
     swarm_id: &RunId,
     strategy: &ResearchStrategy,
     backend: &AgentBackend,
+    max_dynamic_streams: Option<usize>,
+    max_phase_transitions: usize,
+    timeout_minutes: Option<u64>,
 ) -> Result<String> {
-    execute_generic(streams, swarm_id, strategy, backend).await
+    execute_generic(
+        streams,
+        swarm_id,
+        strategy,
+        backend,
+        max_dynamic_streams,
+        max_phase_transitions,
+        timeout_minutes,
+    )
+    .await
 }
 
 /// The single execution loop for all research topologies.
@@ -1085,6 +1135,9 @@ async fn execute_generic(
     swarm_id: &RunId,
     strategy: &ResearchStrategy,
     backend: &AgentBackend,
+    max_dynamic_streams: Option<usize>,
+    max_phase_transitions: usize,
+    timeout_minutes: Option<u64>,
 ) -> Result<String> {
     let initial = extract_initial_streams(strategy);
     let agent_mode = &strategy.execution.agent_mode;
@@ -1120,10 +1173,34 @@ async fn execute_generic(
         * active_streams.iter().map(|s| s.agents).sum::<usize>().max(1);
 
     let mut interrupted = false;
+    let mut dynamic_streams_added = 0usize;
+    let mut wrap_up_started: Option<(usize, std::time::Instant)> = None;
+    let mut phase_transitions = 0usize;
+    let started_at = std::time::Instant::now();
+    let timeout = timeout_minutes.map(|m| std::time::Duration::from_secs(m.saturating_mul(60)));
+    let mut timeout_tick = tokio::time::interval(tokio::time::Duration::from_secs(2));
 
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => { interrupted = true; break; },
+            _ = timeout_tick.tick() => {
+                if let Some(limit) = timeout {
+                    if started_at.elapsed() >= limit {
+                        let ds = format!("swarm/{}/moderator/decisions", swarm_id.0);
+                        let _ = crate::chat::append_to_stream(
+                            streams,
+                            &ds,
+                            "System",
+                            &format!(
+                                "Wall-clock timeout reached ({} min); forcing conclude.",
+                                timeout_minutes.unwrap_or_default()
+                            ),
+                        ).await;
+                        println!("\n  {} Wall-clock timeout reached; concluding", ">>".bright_yellow().bold());
+                        break;
+                    }
+                }
+            }
             item = msg_rx.recv() => {
                 let Some((label, author, text)) = item else { break };
 
@@ -1178,7 +1255,33 @@ async fn execute_generic(
                             ).await;
                             match parse_moderator_action(&decision) {
                                 ModeratorAction::AddStream { name, prompt, agents, reads_from, agent } => {
-                                    let name = slugify(&name);
+                                    if wrap_up_started.is_some() {
+                                        let _ = crate::chat::append_to_stream(
+                                            streams,
+                                            &ds,
+                                            "System",
+                                            "Ignoring add_stream: wrap-up already started; converging to synthesis.",
+                                        ).await;
+                                        continue;
+                                    }
+                                    if max_dynamic_streams.is_some_and(|limit| dynamic_streams_added >= limit) {
+                                        let _ = crate::chat::append_to_stream(
+                                            streams,
+                                            &ds,
+                                            "System",
+                                            "Ignoring add_stream: dynamic stream cap reached; converge with existing streams.",
+                                        ).await;
+                                        continue;
+                                    }
+                                    let Some(name) = normalize_stream_name(&name) else {
+                                        let _ = crate::chat::append_to_stream(
+                                            streams,
+                                            &ds,
+                                            "System",
+                                            "Ignoring add_stream: invalid or reserved stream name.",
+                                        ).await;
+                                        continue;
+                                    };
                                     println!("\n  {} Adding stream: {} ({})", ">>".bright_magenta().bold(), name, agent.as_deref().unwrap_or("default"));
                                     let context = collect_stream_context(streams, swarm_id, &reads_from).await;
                                     let full_prompt = if context.is_empty() {
@@ -1194,6 +1297,7 @@ async fn execute_generic(
                                         &mut active_streams, &mut all_stream_names,
                                         &mut stream_agents, &mut stream_monitors,
                                     ).await?;
+                                    dynamic_streams_added += 1;
                                 }
                                 ModeratorAction::Steer { target, message } => {
                                     println!("\n  {} Steering {}: {}", ">>".bright_magenta().bold(), target, truncate_display(&message, 60));
@@ -1208,6 +1312,16 @@ async fn execute_generic(
                                     }
                                 }
                                 ModeratorAction::StartPhase { context_from, streams: new_specs } => {
+                                    if phase_transitions >= max_phase_transitions {
+                                        let _ = crate::chat::append_to_stream(
+                                            streams,
+                                            &ds,
+                                            "System",
+                                            "Max phase transitions reached; forcing conclude.",
+                                        ).await;
+                                        println!("\n  {} Max phase transitions reached; concluding", ">>".bright_magenta().bold());
+                                        break;
+                                    }
                                     println!("\n  {} Phase transition → {} new streams", ">>".bright_magenta().bold(), new_specs.len());
                                     // Collect context BEFORE killing old streams
                                     let sources: Vec<String> = if context_from.is_empty() {
@@ -1238,6 +1352,7 @@ async fn execute_generic(
                                             &mut stream_agents, &mut stream_monitors,
                                         ).await?;
                                     }
+                                    phase_transitions += 1;
                                 }
                                 ModeratorAction::StopStream { target } => {
                                     println!("\n  {} Stopping stream: {}", ">>".bright_magenta().bold(), target);
@@ -1245,6 +1360,9 @@ async fn execute_generic(
                                 }
                                 ModeratorAction::WrapUp { target } => {
                                     println!("\n  {} Wrapping up", ">>".bright_magenta().bold());
+                                    if wrap_up_started.is_none() {
+                                        wrap_up_started = Some((total_messages, std::time::Instant::now()));
+                                    }
                                     let targets: Vec<String> = target
                                         .map(|t| vec![t])
                                         .unwrap_or_else(|| active_streams.iter().map(|s| s.name.clone()).collect());
@@ -1388,6 +1506,9 @@ pub async fn start_research(
     num_groups: usize,
     agents_per_group: usize,
     max_messages: usize,
+    max_dynamic_streams: Option<usize>,
+    max_phase_transitions: usize,
+    timeout_minutes: Option<u64>,
     agent_type: &str,
     model_override: Option<&str>,
     config: &Config,
@@ -1525,7 +1646,16 @@ pub async fn start_research(
     print_topology_diagram(&strategy);
 
     // Execute via generic engine
-    let report = execute_strategy(&streams, &swarm_id, &strategy, &backend).await?;
+    let report = execute_strategy(
+        &streams,
+        &swarm_id,
+        &strategy,
+        &backend,
+        max_dynamic_streams,
+        max_phase_transitions,
+        timeout_minutes,
+    )
+    .await?;
 
     // Display report
     print_strategy_report(&strategy, &report);
