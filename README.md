@@ -46,8 +46,8 @@ Most AI research tools run one model, in one context, asking itself to consider 
 
    Or via env vars: `S2_ACCESS_TOKEN`, `PARALLAX_BASIN`, `PARALLAX_MODEL`.
 
-   > The planner now runs through your local `claude` CLI (not the Anthropic HTTP API).
-   > Make sure the `claude` command is installed and authenticated on this machine.
+   > The planner now runs through a local CLI backend.
+   > It defaults to `claude`; use `--planner-agent codex` only when you want Codex for planning.
 
 4. Run your first research session:
    ```bash
@@ -56,7 +56,12 @@ Most AI research tools run one model, in one context, asking itself to consider 
      --groups 3 --agents-per-group 2 --max-messages 15
    ```
 
-If planning fails with `Claude CLI not found`, install Claude Code and ensure `claude` is on your `PATH`.
+If planning fails because a backend CLI is missing, either install it (`claude` or `codex`) or switch planner backend:
+
+```bash
+parallax research "..." --planner-agent codex
+parallax research "..." --planner-agent claude
+```
 
 ## Usage
 
@@ -159,7 +164,7 @@ The planner assigns backends per group. Claude agents have full tool access (Web
 | `parallax code-review <task>` | Claude writes, Codex reviews |
 | `parallax init <basin>` | Initialize an S2 basin |
 
-**research flags:** `--hint`, `--groups`, `--agents-per-group`, `--max-messages`, `--agent`, `--model`
+**research flags:** `--hint`, `--groups`, `--agents-per-group`, `--max-messages`, `--agent`, `--planner-agent`, `--model`
 
 **join flags:** `--group`, `--agent`, `--max-turns`, `--context`, `--dir`
 

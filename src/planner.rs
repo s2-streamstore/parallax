@@ -1,17 +1,14 @@
-use tokio::process::Command;
-
+use crate::agent::AgentBackend;
 use crate::error::{OrchestratorError, Result};
 use crate::research::ResearchStrategy;
 
 pub struct Planner {
-    model: String,
+    backend: AgentBackend,
 }
 
 impl Planner {
-    pub fn new(model: &str) -> Self {
-        Self {
-            model: model.to_string(),
-        }
+    pub fn new(backend: AgentBackend) -> Self {
+        Self { backend }
     }
 
     pub async fn design_research_strategy(
@@ -199,48 +196,27 @@ Return the JSON strategy now (ONLY JSON, no explanation):"#,
             question, num_groups, agents_per_group, max_messages, hint_text
         );
 
-        let mut args = vec![
-            "-p",
-            &user_prompt,
-            "--output-format",
-            "text",
-            "--dangerously-skip-permissions",
-            "--max-turns",
-            "1",
-            "--tools",
-            "default",
-            "--system-prompt",
-            system_prompt,
-        ];
-        if !self.model.is_empty() {
-            args.extend_from_slice(&["--model", &self.model]);
-        }
-
-        let output = Command::new("claude")
-            .args(&args)
-            .env_remove("CLAUDECODE")
-            .output()
+        let json_text_owned = self
+            .backend
+            .prompt(system_prompt, &user_prompt)
             .await
             .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    OrchestratorError::Planner("Claude CLI not found. Is `claude` installed and in PATH?".to_string())
+                if self.backend.name() == "claude" {
+                    OrchestratorError::Planner(format!(
+                        "Planner backend 'claude' failed. Is `claude` installed and authenticated? You can switch with --planner-agent codex. Error: {e}"
+                    ))
                 } else {
-                    OrchestratorError::Planner(format!("Failed to run claude for planning: {e}"))
+                    OrchestratorError::Planner(format!(
+                        "Planner backend 'codex' failed. Is `codex` installed and authenticated? You can switch with --planner-agent claude. Error: {e}"
+                    ))
                 }
             })?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(OrchestratorError::Planner(format!(
-                "Local Claude planner failed (exit {:?}): {}",
-                output.status.code(),
-                stderr.trim()
-            )));
-        }
-
-        let json_text_owned = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if json_text_owned.is_empty() {
-            return Err(OrchestratorError::Planner("Local Claude planner returned empty output".to_string()));
+            return Err(OrchestratorError::Planner(format!(
+                "Local {} planner returned empty output",
+                self.backend.name()
+            )));
         }
         let json_text = json_text_owned.as_str();
 

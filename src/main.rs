@@ -90,14 +90,6 @@ async fn init_basin(config: &config::Config, basin_name: &str) -> error::Result<
 
 #[tokio::main]
 async fn main() -> miette::Result<()> {
-    // Second Ctrl+C = hard exit (first is caught by the research loop for graceful cleanup)
-    tokio::spawn(async {
-        let _ = tokio::signal::ctrl_c().await; // first — handled by research loop
-        let _ = tokio::signal::ctrl_c().await; // second — force exit
-        eprintln!("\nForce quit.");
-        std::process::exit(130);
-    });
-
     let cli = Cli::parse();
     let log_to_file = matches!(cli.command, Command::Join { .. } | Command::Research { .. });
 
@@ -213,6 +205,7 @@ async fn main() -> miette::Result<()> {
             agents_per_group,
             max_messages,
             agent,
+            planner_agent,
             model,
         } => {
             research::start_research(
@@ -222,6 +215,7 @@ async fn main() -> miette::Result<()> {
                 agents_per_group,
                 max_messages,
                 &agent,
+                planner_agent.as_deref(),
                 model.as_deref(),
                 &config,
                 cli.basin.as_deref(),

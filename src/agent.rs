@@ -80,6 +80,11 @@ impl AgentBackend {
                 } else {
                     format!("{}\n\n{}", system, user_message)
                 };
+                let output_file = std::env::temp_dir().join(format!(
+                    "parallax-codex-last-message-{}.txt",
+                    uuid::Uuid::new_v4()
+                ));
+                let output_file_str = output_file.to_string_lossy().to_string();
 
                 let output = Command::new("codex")
                     .args([
@@ -91,6 +96,8 @@ impl AgentBackend {
                         "--skip-git-repo-check",
                         "--color",
                         "never",
+                        "--output-last-message",
+                        &output_file_str,
                         &full_prompt,
                     ])
                     .output()
@@ -117,14 +124,18 @@ impl AgentBackend {
                     )));
                 }
 
-                // Codex outputs a lot of metadata — extract just the last non-empty line
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let response = stdout
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .last()
-                    .unwrap_or(stdout.trim())
-                    .to_string();
+                // Prefer Codex's final message output file (clean assistant text, no CLI metadata).
+                let file_response = std::fs::read_to_string(&output_file)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                let _ = std::fs::remove_file(&output_file);
+
+                let response = if let Some(msg) = file_response {
+                    msg
+                } else {
+                    String::from_utf8_lossy(&output.stdout).trim().to_string()
+                };
 
                 Ok(response)
             }

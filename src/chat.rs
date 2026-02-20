@@ -33,7 +33,7 @@ async fn run_persistent_agent(
     peers: &[String],
     max_messages: usize,
     message_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    child_pids: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    child_groups: std::sync::Arc<std::sync::Mutex<Vec<i32>>>,
     model: &str,
 ) -> Result<()> {
     let s2_stream = streams.stream(stream_name)?;
@@ -67,7 +67,20 @@ async fn run_persistent_agent(
     if !model.is_empty() {
         args.extend_from_slice(&["--model", model]);
     }
-    let mut child = Command::new("claude")
+    let mut cmd = Command::new("claude");
+    cmd.kill_on_drop(true);
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            let rc = libc::setpgid(0, 0);
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    let mut child = cmd
         .args(&args)
         .env_remove("CLAUDECODE")
         .stdin(std::process::Stdio::piped())
@@ -75,10 +88,8 @@ async fn run_persistent_agent(
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| OrchestratorError::Worker(format!("Failed to spawn claude for {name}: {e}")))?;
-
-    // Register PID for cleanup on Ctrl+C
     if let Some(pid) = child.id() {
-        child_pids.lock().unwrap().push(pid);
+        child_groups.lock().unwrap().push(pid as i32);
     }
 
     let mut stdin = child.stdin.take().expect("stdin piped");
@@ -340,8 +351,7 @@ pub async fn run_persistent_chat_agent(
     .await
 }
 
-/// Like `run_persistent_chat_agent` but registers child PIDs into the provided kill list.
-pub async fn run_persistent_chat_agent_with_kill_list(
+pub async fn run_persistent_chat_agent_with_group_list(
     streams: &OrchestratorStreams,
     stream_name: &str,
     name: &str,
@@ -349,7 +359,7 @@ pub async fn run_persistent_chat_agent_with_kill_list(
     peers: &[String],
     max_turns: usize,
     model: &str,
-    child_pids: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    child_groups: std::sync::Arc<std::sync::Mutex<Vec<i32>>>,
 ) -> Result<()> {
     run_persistent_agent(
         streams,
@@ -360,7 +370,7 @@ pub async fn run_persistent_chat_agent_with_kill_list(
         peers,
         max_turns,
         std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        child_pids,
+        child_groups,
         model,
     )
     .await
