@@ -213,7 +213,7 @@ Return the JSON strategy now (ONLY JSON, no explanation):"#,
             .header("content-type", "application/json")
             .json(&serde_json::json!({
                 "model": self.model,
-                "max_tokens": 4096,
+                "max_tokens": 16384,
                 "system": system_prompt,
                 "messages": [
                     {
