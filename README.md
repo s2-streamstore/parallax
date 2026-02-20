@@ -22,7 +22,7 @@ Most AI research tools run one model, in one context, asking itself to consider 
 
 ## Getting started
 
-1. Get an S2 access token from [s2.dev/dashboard](https://s2.dev/dashboard) and create a basin.
+1. Get an S2 access token (it's free) from [s2.dev/dashboard](https://s2.dev/dashboard) and create a basin.
 
 2. Build and install:
    ```bash
@@ -49,7 +49,12 @@ Most AI research tools run one model, in one context, asking itself to consider 
    > The planner now runs through a local CLI backend.
    > It defaults to `claude`; use `--planner-agent codex` only when you want Codex for planning.
 
-4. Run your first research session:
+4. Initialize the basin once (required before first use):
+   ```bash
+   parallax init your-basin
+   ```
+
+5. Run your first research session:
    ```bash
    parallax research "What are the biggest risks for a coffee shop business in 2026?" \
      --hint "adversarial: bulls vs bears vs analysts" \
@@ -110,6 +115,21 @@ parallax message <swarm-id> "focus on the regulatory angle" --to "bears"
 parallax message <swarm-id> "wrap up and synthesize"
 ```
 
+### Convergence controls
+
+Use these flags to bound long-running moderator flows:
+
+```bash
+parallax research "Analyze GTM risks for a new B2B SaaS launch" \
+  --max-dynamic-streams 4 \
+  --max-phase-transitions 3 \
+  --timeout 15
+```
+
+- `--max-dynamic-streams <n>`: cap moderator-created streams (`0` disables dynamic stream creation).
+- `--max-phase-transitions <n>`: force conclude after `n` `start_phase` transitions (default: `3`).
+- `--timeout <minutes>`: wall-clock timeout for the research run; on expiry, conclude and synthesize.
+
 ## How it works
 
 ```
@@ -164,13 +184,29 @@ The planner assigns backends per group. Claude agents have full tool access (Web
 | `parallax code-review <task>` | Claude writes, Codex reviews |
 | `parallax init <basin>` | Initialize an S2 basin |
 
-**research flags:** `--hint`, `--groups`, `--agents-per-group`, `--max-messages`, `--agent`, `--planner-agent`, `--model`
+**research flags:** `--hint`, `--groups`, `--agents-per-group`, `--max-messages`, `--max-dynamic-streams`, `--max-phase-transitions`, `--timeout`, `--agent`, `--planner-agent`, `--model`
 
 **join flags:** `--group`, `--agent`, `--max-turns`, `--context`, `--dir`
 
 ## Feedback
 
 Use [GitHub Issues](https://github.com/s2-streamstore/parallax/issues) to report bugs or request features.
+
+## Troubleshooting
+
+If you see:
+
+```text
+S2 error: stream_not_found: Stream not found
+```
+
+you likely skipped basin initialization. Run:
+
+```bash
+parallax init <your-basin>
+```
+
+then retry your command.
 
 ## Reach out
 
