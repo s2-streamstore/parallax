@@ -32,7 +32,6 @@ pub struct S2Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnthropicConfig {
-    pub api_key: Option<String>,
     /// Model for planner (task decomposition)
     #[serde(default = "default_model")]
     pub model: String,
@@ -44,7 +43,6 @@ pub struct AnthropicConfig {
 impl Default for AnthropicConfig {
     fn default() -> Self {
         Self {
-            api_key: None,
             model: default_model(),
             agent_model: default_agent_model(),
         }
@@ -75,9 +73,6 @@ impl Config {
         }
         if let Ok(endpoint) = std::env::var("S2_BASIN_ENDPOINT") {
             config.s2.basin_endpoint = Some(endpoint);
-        }
-        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-            config.anthropic.api_key = Some(key);
         }
         if let Ok(model) = std::env::var("PARALLAX_MODEL") {
             config.anthropic.model = model;
@@ -118,14 +113,6 @@ impl Config {
             ))
     }
 
-    pub fn anthropic_api_key(&self) -> Result<&str> {
-        self.anthropic
-            .api_key
-            .as_deref()
-            .ok_or_else(|| OrchestratorError::Config(
-                "Anthropic API key not set. Set ANTHROPIC_API_KEY env var or add to config file.".into(),
-            ))
-    }
 }
 
 fn config_path() -> Option<PathBuf> {

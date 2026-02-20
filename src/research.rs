@@ -1,6 +1,7 @@
 use colored::Colorize;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::future::pending;
 
 use crate::agent::AgentBackend;
 use crate::config::Config;
@@ -755,7 +756,7 @@ async fn start_stream(
     agent_mode: &AgentMode,
     default_backend: &AgentBackend,
     max_messages_per_agent: usize,
-    child_pids: &std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    child_groups: &std::sync::Arc<std::sync::Mutex<Vec<i32>>>,
     msg_tx: &tokio::sync::mpsc::UnboundedSender<(String, String, String)>,
     active_streams: &mut Vec<StreamSpec>,
     all_stream_names: &mut Vec<String>,
@@ -763,6 +764,16 @@ async fn start_stream(
     stream_monitors: &mut std::collections::HashMap<String, tokio::task::JoinHandle<()>>,
 ) -> Result<()> {
     let full_name = format!("swarm/{}/{}", swarm_id.0, spec.name);
+    let role_prompt = match agent_mode {
+        AgentMode::PersistentChat { system_prompt } => {
+            if system_prompt.trim().is_empty() {
+                spec.prompt.clone()
+            } else {
+                format!("{}\n\n{}", system_prompt, spec.prompt)
+            }
+        }
+        AgentMode::OneShot { .. } => spec.prompt.clone(),
+    };
 
     // Resolve per-stream backend: use the stream's override if set, otherwise session default
     let backend = match &spec.agent {
@@ -770,7 +781,7 @@ async fn start_stream(
         None => default_backend.clone(),
     };
 
-    crate::chat::append_to_stream(streams, &full_name, "System", &spec.prompt).await?;
+    crate::chat::append_to_stream(streams, &full_name, "System", &role_prompt).await?;
 
     let mut handles = Vec::new();
     match agent_mode {
@@ -783,7 +794,7 @@ async fn start_stream(
                     .replace("{question}", "")
                     .replace("{context}", "")
                     .replace("{panelist_id}", &i.to_string());
-                let spec_prompt = spec.prompt.clone();
+                let spec_prompt = role_prompt.clone();
                 let stream_label = spec.name.clone();
                 handles.push(tokio::spawn(async move {
                     let response = b.prompt(&spec_prompt, &prompt)
@@ -799,8 +810,8 @@ async fn start_stream(
             if matches!(backend, AgentBackend::Claude { .. }) {
                 let h = spawn_group_agents_on_stream(
                     streams, swarm_id, &spec.name,
-                    &GroupDef { name: spec.name.clone(), prompt: spec.prompt.clone(), agents: spec.agents, agent: spec.agent.clone() },
-                    &backend, max_messages_per_agent, child_pids.clone(),
+                    &GroupDef { name: spec.name.clone(), prompt: role_prompt.clone(), agents: spec.agents, agent: spec.agent.clone() },
+                    &backend, max_messages_per_agent, child_groups.clone(),
                 ).await;
                 handles.extend(h);
             } else {
@@ -810,7 +821,7 @@ async fn start_stream(
                     let b = backend.clone();
                     let s = streams.clone();
                     let sn = full_name.clone();
-                    let system = spec.prompt.clone();
+                    let system = role_prompt.clone();
                     let display = spec.name.split('/').last().unwrap_or(&spec.name).to_string();
                     let agent_name = format!("{}-{}", display, &uuid::Uuid::new_v4().to_string()[..8]);
                     let max_msgs = max_messages_per_agent;
@@ -924,7 +935,11 @@ async fn run_polling_agent(
 
         let response = backend.prompt(
             system,
-            &format!("Recent messages:\n{}\n\nRespond with your analysis.", new.join("\n")),
+            &format!(
+                "Recent messages:\n{}\n\nRespond according to your role and strategy instructions. \
+                 Build on, challenge, or refine specific prior claims when appropriate.",
+                new.join("\n")
+            ),
         ).await.unwrap_or_default();
 
         if !response.is_empty() {
@@ -934,6 +949,47 @@ async fn run_polling_agent(
     }
 
     Ok(())
+}
+
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sigterm = signal(SignalKind::terminate()).ok();
+        let mut sigquit = signal(SignalKind::quit()).ok();
+        let mut sigtstp = signal(SignalKind::from_raw(libc::SIGTSTP)).ok();
+
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = async {
+                if let Some(s) = &mut sigterm {
+                    let _ = s.recv().await;
+                } else {
+                    pending::<()>().await;
+                }
+            } => {}
+            _ = async {
+                if let Some(s) = &mut sigquit {
+                    let _ = s.recv().await;
+                } else {
+                    pending::<()>().await;
+                }
+            } => {}
+            _ = async {
+                if let Some(s) = &mut sigtstp {
+                    let _ = s.recv().await;
+                } else {
+                    pending::<()>().await;
+                }
+            } => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn build_moderator_prompt(
@@ -1075,7 +1131,7 @@ async fn spawn_group_agents_on_stream(
     group: &GroupDef,
     backend: &AgentBackend,
     max_messages: usize,
-    child_pids: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    child_groups: std::sync::Arc<std::sync::Mutex<Vec<i32>>>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::new();
     for _ in 0..group.agents {
@@ -1086,11 +1142,11 @@ async fn spawn_group_agents_on_stream(
         let b = backend.clone();
         let display = stream_path.split('/').last().unwrap_or(stream_path);
         let agent_name = format!("{}-{}", display, &uuid::Uuid::new_v4().to_string()[..8]);
-        let pids = child_pids.clone();
+        let groups = child_groups.clone();
 
         handles.push(tokio::spawn(async move {
-            let _ = crate::chat::run_persistent_chat_agent_with_kill_list(
-                &s, &stream_name, &agent_name, &gprompt, &[], max_messages, b.model(), pids,
+            let _ = crate::chat::run_persistent_chat_agent_with_group_list(
+                &s, &stream_name, &agent_name, &gprompt, &[], max_messages, b.model(), groups,
             ).await;
         }));
 
@@ -1148,7 +1204,7 @@ async fn execute_generic(
         std::collections::HashMap::new();
     let mut stream_monitors: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
         std::collections::HashMap::new();
-    let child_pids: std::sync::Arc<std::sync::Mutex<Vec<u32>>> =
+    let child_groups: std::sync::Arc<std::sync::Mutex<Vec<i32>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel::<(String, String, String)>();
 
@@ -1158,7 +1214,7 @@ async fn execute_generic(
         start_stream(
             streams, swarm_id, spec, agent_mode, backend,
             strategy.execution.max_messages_per_agent,
-            &child_pids, &msg_tx,
+            &child_groups, &msg_tx,
             &mut active_streams, &mut all_stream_names,
             &mut stream_agents, &mut stream_monitors,
         ).await?;
@@ -1173,6 +1229,7 @@ async fn execute_generic(
         * active_streams.iter().map(|s| s.agents).sum::<usize>().max(1);
 
     let mut interrupted = false;
+    let mut shutdown_signal = std::pin::pin!(wait_for_shutdown_signal());
     let mut dynamic_streams_added = 0usize;
     let mut wrap_up_started: Option<(usize, std::time::Instant)> = None;
     let mut phase_transitions = 0usize;
@@ -1182,7 +1239,7 @@ async fn execute_generic(
 
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => { interrupted = true; break; },
+            _ = &mut shutdown_signal => { interrupted = true; break; },
             _ = timeout_tick.tick() => {
                 if let Some(limit) = timeout {
                     if started_at.elapsed() >= limit {
@@ -1293,7 +1350,7 @@ async fn execute_generic(
                                     start_stream(
                                         streams, swarm_id, &spec, agent_mode, backend,
                                         strategy.execution.max_messages_per_agent,
-                                        &child_pids, &msg_tx,
+                                        &child_groups, &msg_tx,
                                         &mut active_streams, &mut all_stream_names,
                                         &mut stream_agents, &mut stream_monitors,
                                     ).await?;
@@ -1347,7 +1404,7 @@ async fn execute_generic(
                                         start_stream(
                                             streams, swarm_id, &spec, agent_mode, backend,
                                             strategy.execution.max_messages_per_agent,
-                                            &child_pids, &msg_tx,
+                                            &child_groups, &msg_tx,
                                             &mut active_streams, &mut all_stream_names,
                                             &mut stream_agents, &mut stream_monitors,
                                         ).await?;
@@ -1402,14 +1459,36 @@ async fn execute_generic(
         for h in handles { h.abort(); }
     }
     drop(msg_tx);
-
-    let pids = child_pids.lock().unwrap().clone();
-    for &pid in &pids {
-        let _ = std::process::Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+    #[cfg(unix)]
+    {
+        let mut groups = child_groups.lock().unwrap().clone();
+        groups.sort_unstable();
+        groups.dedup();
+        for pgid in groups {
+            if pgid <= 0 {
+                continue;
+            }
+            // Negative pid targets the entire process group.
+            unsafe {
+                let _ = libc::kill(-pgid, libc::SIGTERM);
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+        let mut groups = child_groups.lock().unwrap().clone();
+        groups.sort_unstable();
+        groups.dedup();
+        for pgid in groups {
+            if pgid <= 0 {
+                continue;
+            }
+            unsafe {
+                let _ = libc::kill(-pgid, libc::SIGKILL);
+            }
+        }
     }
 
     if interrupted {
-        println!("  {} Killed {} agent processes.", "■".bright_red(), pids.len());
+        println!("  {} Agent tasks stopped.", "■".bright_red());
         return Ok("(research interrupted by user)".to_string());
     }
 
@@ -1510,6 +1589,7 @@ pub async fn start_research(
     max_phase_transitions: usize,
     timeout_minutes: Option<u64>,
     agent_type: &str,
+    planner_agent_type: Option<&str>,
     model_override: Option<&str>,
     config: &Config,
     basin_override: Option<&str>,
@@ -1520,10 +1600,15 @@ pub async fn start_research(
     let backend = AgentBackend::from_str(agent_type, model);
 
     // Plan the research dynamically - AI designs strategy on the fly
-    let api_key = config.anthropic_api_key()?.to_string();
-    let planner = crate::planner::Planner::new(api_key, &config.anthropic.model);
+    let planner_backend_name = planner_agent_type.unwrap_or("claude");
+    let planner_backend = AgentBackend::from_str(planner_backend_name, &config.anthropic.model);
+    let planner = crate::planner::Planner::new(planner_backend.clone());
 
-    println!("\n{} Designing research strategy...", "⚙".dimmed());
+    println!(
+        "\n{} Designing research strategy... ({})",
+        "⚙".dimmed(),
+        planner_backend.name().bold()
+    );
 
     // Design completely custom strategy based on question
     let mut strategy = planner
@@ -1548,6 +1633,8 @@ pub async fn start_research(
                 if g.agents > agents_per_group {
                     g.agents = agents_per_group;
                 }
+                // CLI-selected backend is authoritative for execution.
+                g.agent = Some(agent_type.to_string());
             }
             strategy.execution.agent_count = groups.iter().map(|g| g.agents).sum();
         }
@@ -1566,6 +1653,8 @@ pub async fn start_research(
                     if g.agents > agents_per_group {
                         g.agents = agents_per_group;
                     }
+                    // CLI-selected backend is authoritative for execution.
+                    g.agent = Some(agent_type.to_string());
                 }
             }
             strategy.execution.agent_count = rounds.first()
@@ -1580,6 +1669,8 @@ pub async fn start_research(
                 if g.agents > agents_per_group {
                     g.agents = agents_per_group;
                 }
+                // CLI-selected backend is authoritative for execution.
+                g.agent = Some(agent_type.to_string());
             }
             strategy.execution.agent_count = root_groups.iter().map(|g| g.agents).sum();
         }

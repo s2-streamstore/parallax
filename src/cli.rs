@@ -103,6 +103,10 @@ pub enum Command {
         #[arg(long, default_value = "claude")]
         agent: String,
 
+        /// Planner backend (default: claude): claude or codex
+        #[arg(long)]
+        planner_agent: Option<String>,
+
         /// Model to use (e.g. claude-sonnet-4-5-20250929, opus-4). Overrides PARALLAX_AGENT_MODEL.
         #[arg(long)]
         model: Option<String>,
