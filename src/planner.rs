@@ -1,19 +1,14 @@
-use serde::Deserialize;
-
+use crate::agent::AgentBackend;
 use crate::error::{OrchestratorError, Result};
 use crate::research::ResearchStrategy;
 
 pub struct Planner {
-    api_key: String,
-    model: String,
+    backend: AgentBackend,
 }
 
 impl Planner {
-    pub fn new(api_key: String, model: &str) -> Self {
-        Self {
-            api_key,
-            model: model.to_string(),
-        }
+    pub fn new(backend: AgentBackend) -> Self {
+        Self { backend }
     }
 
     pub async fn design_research_strategy(
@@ -55,7 +50,7 @@ Return JSON with this structure:
         "name": "Group name (e.g. 'Security Experts', 'Cost Analysts')",
         "prompt": "Detailed prompt for this group's agents",
         "agents": 3,
-        "agent": "claude"  // optional: "claude" (default, has tools), "codex" (sandboxed, good for code review/verification)
+        "agent": "claude"  // optional: "claude" (default, has tools), "codex" (full-permission local executor)
       }
     ]
   },
@@ -134,7 +129,7 @@ CRITICAL JSON SCHEMA RULES:
 
 AGENT BACKENDS:
 - "claude" (default): full tool access (WebSearch, WebFetch, Read, Bash). Best for research, analysis, tool-using investigation.
-- "codex": sandboxed read-only execution. Best for code review, adversarial verification, fact-checking code claims.
+- "codex": full-permission local executor in this integration. Best for verification, code review, and shell-driven investigation.
 - You can mix backends in the same strategy — e.g. Claude groups do research, a Codex group reviews and verifies.
 - Set "agent" on any group to override the default. Omit it to use the session default (claude).
 
@@ -201,54 +196,29 @@ Return the JSON strategy now (ONLY JSON, no explanation):"#,
             question, num_groups, agents_per_group, max_messages, hint_text
         );
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .map_err(|e| OrchestratorError::Planner(format!("Failed to create HTTP client: {}", e)))?;
-
-        let response = client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&serde_json::json!({
-                "model": self.model,
-                "max_tokens": 4096,
-                "system": system_prompt,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": user_prompt
-                    }
-                ]
-            }))
-            .send()
+        let json_text_owned = self
+            .backend
+            .prompt(system_prompt, &user_prompt)
             .await
-            .map_err(|e| OrchestratorError::Planner(format!("API request failed: {}", e)))?;
+            .map_err(|e| {
+                if self.backend.name() == "claude" {
+                    OrchestratorError::Planner(format!(
+                        "Planner backend 'claude' failed. Is `claude` installed and authenticated? You can switch with --planner-agent codex. Error: {e}"
+                    ))
+                } else {
+                    OrchestratorError::Planner(format!(
+                        "Planner backend 'codex' failed. Is `codex` installed and authenticated? You can switch with --planner-agent claude. Error: {e}"
+                    ))
+                }
+            })?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unable to read error body".to_string());
+        if json_text_owned.is_empty() {
             return Err(OrchestratorError::Planner(format!(
-                "API error {}: {}",
-                status, body
+                "Local {} planner returned empty output",
+                self.backend.name()
             )));
         }
-
-        let api_response: ApiResponse = response
-            .json()
-            .await
-            .map_err(|e| OrchestratorError::Planner(format!("Failed to parse API response: {}", e)))?;
-
-        let content = api_response
-            .content
-            .first()
-            .ok_or_else(|| OrchestratorError::Planner("Empty API response".to_string()))?;
-
-        let json_text = &content.text;
+        let json_text = json_text_owned.as_str();
 
         // Try to parse as JSON directly, or extract from markdown
         let strategy: ResearchStrategy = if let Ok(s) = serde_json::from_str(json_text) {
@@ -272,16 +242,6 @@ Return the JSON strategy now (ONLY JSON, no explanation):"#,
 
         Ok(strategy)
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiResponse {
-    content: Vec<ContentBlock>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ContentBlock {
-    text: String,
 }
 
 /// Extract JSON from markdown code blocks or raw text

@@ -39,11 +39,15 @@ Most AI research tools run one model, in one context, asking itself to consider 
    basin = "your-basin"
 
    [anthropic]
-   api_key = "your-anthropic-key"
+   # optional model override used by local Claude planner
+   model = "claude-sonnet-4-5-20250929"
    EOF
    ```
 
-   Or via env vars: `S2_ACCESS_TOKEN`, `PARALLAX_BASIN`, `ANTHROPIC_API_KEY`.
+   Or via env vars: `S2_ACCESS_TOKEN`, `PARALLAX_BASIN`, `PARALLAX_MODEL`.
+
+   > The planner now runs through a local CLI backend.
+   > It defaults to `claude`; use `--planner-agent codex` only when you want Codex for planning.
 
 4. Initialize the basin once (required before first use):
    ```bash
@@ -56,6 +60,13 @@ Most AI research tools run one model, in one context, asking itself to consider 
      --hint "adversarial: bulls vs bears vs analysts" \
      --groups 3 --agents-per-group 2 --max-messages 15
    ```
+
+If planning fails because a backend CLI is missing, either install it (`claude` or `codex`) or switch planner backend:
+
+```bash
+parallax research "..." --planner-agent codex
+parallax research "..." --planner-agent claude
+```
 
 ## Usage
 
@@ -160,7 +171,7 @@ parallax research "Audit the auth module for security issues" \
   --groups 2 --agents-per-group 2
 ```
 
-The planner assigns backends per group. Claude agents have full tool access (WebSearch, WebFetch, Bash). Codex agents run in a sandboxed read-only environment, good for code review and verification.
+The planner assigns backends per group. Claude agents have full tool access (WebSearch, WebFetch, Bash). Codex agents run with full permissions in this integration and are useful for verification and implementation-heavy workflows.
 
 ## Commands
 
@@ -173,7 +184,7 @@ The planner assigns backends per group. Claude agents have full tool access (Web
 | `parallax code-review <task>` | Claude writes, Codex reviews |
 | `parallax init <basin>` | Initialize an S2 basin |
 
-**research flags:** `--hint`, `--groups`, `--agents-per-group`, `--max-messages`, `--max-dynamic-streams`, `--max-phase-transitions`, `--timeout`, `--agent`, `--model`
+**research flags:** `--hint`, `--groups`, `--agents-per-group`, `--max-messages`, `--max-dynamic-streams`, `--max-phase-transitions`, `--timeout`, `--agent`, `--planner-agent`, `--model`
 
 **join flags:** `--group`, `--agent`, `--max-turns`, `--context`, `--dir`
 

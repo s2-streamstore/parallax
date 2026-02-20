@@ -86,7 +86,7 @@ impl AgentBackend {
                         "-a",
                         "never",
                         "--sandbox",
-                        "read-only",
+                        "danger-full-access",
                         "exec",
                         "--skip-git-repo-check",
                         "--color",
@@ -117,14 +117,8 @@ impl AgentBackend {
                     )));
                 }
 
-                // Codex outputs a lot of metadata — extract just the last non-empty line
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let response = stdout
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .last()
-                    .unwrap_or(stdout.trim())
-                    .to_string();
+                // Use full stdout; planner/consumers can extract structured content from it.
+                let response = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
                 Ok(response)
             }
