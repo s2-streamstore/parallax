@@ -1,11 +1,11 @@
 use colored::Colorize;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::future::pending;
 
 use crate::agent::AgentBackend;
 use crate::config::Config;
 use crate::error::Result;
+use crate::signal::wait_for_shutdown_signal;
 use crate::streams::{self, OrchestratorStreams};
 use crate::swarm::{ResearchGroup, Strategy, StrategyType};
 use crate::types::*;
@@ -949,47 +949,6 @@ async fn run_polling_agent(
     }
 
     Ok(())
-}
-
-async fn wait_for_shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-
-        let mut sigterm = signal(SignalKind::terminate()).ok();
-        let mut sigquit = signal(SignalKind::quit()).ok();
-        let mut sigtstp = signal(SignalKind::from_raw(libc::SIGTSTP)).ok();
-
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = async {
-                if let Some(s) = &mut sigterm {
-                    let _ = s.recv().await;
-                } else {
-                    pending::<()>().await;
-                }
-            } => {}
-            _ = async {
-                if let Some(s) = &mut sigquit {
-                    let _ = s.recv().await;
-                } else {
-                    pending::<()>().await;
-                }
-            } => {}
-            _ = async {
-                if let Some(s) = &mut sigtstp {
-                    let _ = s.recv().await;
-                } else {
-                    pending::<()>().await;
-                }
-            } => {}
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
 }
 
 fn build_moderator_prompt(

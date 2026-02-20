@@ -53,7 +53,7 @@ impl AgentBackend {
                 if !model.is_empty() {
                     args.extend_from_slice(&["--model", model]);
                 }
-                let mut child = Command::new("claude")
+                let child = Command::new("claude")
                     .args(&args)
                     .env_remove("CLAUDECODE")
                     .stdout(std::process::Stdio::piped())
@@ -89,7 +89,7 @@ impl AgentBackend {
                     format!("{}\n\n{}", system, user_message)
                 };
 
-                let mut child = Command::new("codex")
+                let child = Command::new("codex")
                     .args([
                         "-a",
                         "never",
