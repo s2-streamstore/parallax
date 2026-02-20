@@ -1399,8 +1399,7 @@ pub async fn start_research(
     let backend = AgentBackend::from_str(agent_type, model);
 
     // Plan the research dynamically - AI designs strategy on the fly
-    let api_key = config.anthropic_api_key()?.to_string();
-    let planner = crate::planner::Planner::new(api_key, &config.anthropic.model);
+    let planner = crate::planner::Planner::new(&config.anthropic.model);
 
     println!("\n{} Designing research strategy...", "⚙".dimmed());
 

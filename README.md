@@ -39,11 +39,15 @@ Most AI research tools run one model, in one context, asking itself to consider 
    basin = "your-basin"
 
    [anthropic]
-   api_key = "your-anthropic-key"
+   # optional model override used by local Claude planner
+   model = "claude-sonnet-4-5-20250929"
    EOF
    ```
 
-   Or via env vars: `S2_ACCESS_TOKEN`, `PARALLAX_BASIN`, `ANTHROPIC_API_KEY`.
+   Or via env vars: `S2_ACCESS_TOKEN`, `PARALLAX_BASIN`, `PARALLAX_MODEL`.
+
+   > The planner now runs through your local `claude` CLI (not the Anthropic HTTP API).
+   > Make sure the `claude` command is installed and authenticated on this machine.
 
 4. Run your first research session:
    ```bash
@@ -51,6 +55,8 @@ Most AI research tools run one model, in one context, asking itself to consider 
      --hint "adversarial: bulls vs bears vs analysts" \
      --groups 3 --agents-per-group 2 --max-messages 15
    ```
+
+If planning fails with `Claude CLI not found`, install Claude Code and ensure `claude` is on your `PATH`.
 
 ## Usage
 

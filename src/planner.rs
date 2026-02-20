@@ -1,17 +1,15 @@
-use serde::Deserialize;
+use tokio::process::Command;
 
 use crate::error::{OrchestratorError, Result};
 use crate::research::ResearchStrategy;
 
 pub struct Planner {
-    api_key: String,
     model: String,
 }
 
 impl Planner {
-    pub fn new(api_key: String, model: &str) -> Self {
+    pub fn new(model: &str) -> Self {
         Self {
-            api_key,
             model: model.to_string(),
         }
     }
@@ -201,54 +199,50 @@ Return the JSON strategy now (ONLY JSON, no explanation):"#,
             question, num_groups, agents_per_group, max_messages, hint_text
         );
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .map_err(|e| OrchestratorError::Planner(format!("Failed to create HTTP client: {}", e)))?;
+        let mut args = vec![
+            "-p",
+            &user_prompt,
+            "--output-format",
+            "text",
+            "--dangerously-skip-permissions",
+            "--max-turns",
+            "1",
+            "--tools",
+            "default",
+            "--system-prompt",
+            system_prompt,
+        ];
+        if !self.model.is_empty() {
+            args.extend_from_slice(&["--model", &self.model]);
+        }
 
-        let response = client
-            .post("https://api.anthropic.com/v1/messages")
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&serde_json::json!({
-                "model": self.model,
-                "max_tokens": 4096,
-                "system": system_prompt,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": user_prompt
-                    }
-                ]
-            }))
-            .send()
+        let output = Command::new("claude")
+            .args(&args)
+            .env_remove("CLAUDECODE")
+            .output()
             .await
-            .map_err(|e| OrchestratorError::Planner(format!("API request failed: {}", e)))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    OrchestratorError::Planner("Claude CLI not found. Is `claude` installed and in PATH?".to_string())
+                } else {
+                    OrchestratorError::Planner(format!("Failed to run claude for planning: {e}"))
+                }
+            })?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unable to read error body".to_string());
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(OrchestratorError::Planner(format!(
-                "API error {}: {}",
-                status, body
+                "Local Claude planner failed (exit {:?}): {}",
+                output.status.code(),
+                stderr.trim()
             )));
         }
 
-        let api_response: ApiResponse = response
-            .json()
-            .await
-            .map_err(|e| OrchestratorError::Planner(format!("Failed to parse API response: {}", e)))?;
-
-        let content = api_response
-            .content
-            .first()
-            .ok_or_else(|| OrchestratorError::Planner("Empty API response".to_string()))?;
-
-        let json_text = &content.text;
+        let json_text_owned = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if json_text_owned.is_empty() {
+            return Err(OrchestratorError::Planner("Local Claude planner returned empty output".to_string()));
+        }
+        let json_text = json_text_owned.as_str();
 
         // Try to parse as JSON directly, or extract from markdown
         let strategy: ResearchStrategy = if let Ok(s) = serde_json::from_str(json_text) {
@@ -272,16 +266,6 @@ Return the JSON strategy now (ONLY JSON, no explanation):"#,
 
         Ok(strategy)
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiResponse {
-    content: Vec<ContentBlock>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ContentBlock {
-    text: String,
 }
 
 /// Extract JSON from markdown code blocks or raw text
