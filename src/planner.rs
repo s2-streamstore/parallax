@@ -18,6 +18,7 @@ impl Planner {
         num_groups: usize,
         agents_per_group: usize,
         max_messages: usize,
+        role_diversity: bool,
     ) -> Result<ResearchStrategy> {
         let system_prompt = r#"You are a research methodology architect with unlimited creativity.
 
@@ -145,6 +146,11 @@ Return ONLY valid JSON matching the EXACT schema shown above. No markdown, no ex
         let hint_text = hint
             .map(|h| format!("\n\nUSER HINT: {}", h))
             .unwrap_or_default();
+        let role_diversity_text = if role_diversity {
+            "ROLE DIVERSITY: enabled. Assign materially different roles/perspectives to groups so they contribute non-overlapping evidence."
+        } else {
+            "ROLE DIVERSITY: disabled. Do not force artificial role diversification; cohesive or overlapping group roles are acceptable."
+        };
 
         let user_prompt = format!(
             r#"Design a research strategy for this question:
@@ -156,6 +162,7 @@ CONSTRAINTS (must obey):
 - EXACTLY {} agents per group (do not exceed)
 - Max messages per agent: {}
 
+{}
 {}
 
 CRITICAL PROMPT DESIGN RULES:
@@ -193,7 +200,7 @@ DESIGN PROCESS:
 
 
 Return the JSON strategy now (ONLY JSON, no explanation):"#,
-            question, num_groups, agents_per_group, max_messages, hint_text
+            question, num_groups, agents_per_group, max_messages, hint_text, role_diversity_text
         );
 
         let json_text_owned = self

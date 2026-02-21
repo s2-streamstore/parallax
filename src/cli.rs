@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -107,6 +107,16 @@ pub enum Command {
         #[arg(long)]
         planner_agent: Option<String>,
 
+        /// Runtime backend selection policy:
+        /// fixed = force --agent for all groups (default)
+        /// planner = use planner's per-group backend, fallback to --agent
+        #[arg(long, value_enum, default_value_t = ResearchAgentMode::Fixed)]
+        agent_mode: ResearchAgentMode,
+
+        /// Encourage planner to diversify group roles/perspectives
+        #[arg(long, default_value_t = true, action = ArgAction::Set)]
+        role_diversity: bool,
+
         /// Model to use (e.g. claude-sonnet-4-5-20250929, opus-4). Overrides PARALLAX_AGENT_MODEL.
         #[arg(long)]
         model: Option<String>,
@@ -127,4 +137,10 @@ pub enum Command {
         #[arg(long, default_value = "5")]
         max_iterations: usize,
     },
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ResearchAgentMode {
+    Fixed,
+    Planner,
 }

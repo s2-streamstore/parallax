@@ -3,6 +3,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentBackend;
+use crate::cli::ResearchAgentMode;
 use crate::config::Config;
 use crate::error::Result;
 use crate::signal::wait_for_shutdown_signal;
@@ -1538,6 +1539,34 @@ async fn synthesize_research(
 // Entry point
 // ───────────────────────────────────────────────────────────────────
 
+fn apply_group_runtime_controls(
+    group: &mut GroupDef,
+    agents_per_group: usize,
+    default_agent: &str,
+    agent_mode: ResearchAgentMode,
+) {
+    if group.agents > agents_per_group {
+        group.agents = agents_per_group;
+    }
+
+    match agent_mode {
+        ResearchAgentMode::Fixed => {
+            group.agent = Some(default_agent.to_string());
+        }
+        ResearchAgentMode::Planner => {
+            // Keep planner-selected backend when present, otherwise fall back to --agent.
+            let needs_fallback = group
+                .agent
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true);
+            if needs_fallback {
+                group.agent = Some(default_agent.to_string());
+            }
+        }
+    }
+}
+
 pub async fn start_research(
     question: &str,
     hint: Option<&str>,
@@ -1549,6 +1578,8 @@ pub async fn start_research(
     timeout_minutes: Option<u64>,
     agent_type: &str,
     planner_agent_type: Option<&str>,
+    agent_mode: ResearchAgentMode,
+    role_diversity: bool,
     model_override: Option<&str>,
     config: &Config,
     basin_override: Option<&str>,
@@ -1577,6 +1608,7 @@ pub async fn start_research(
             num_groups,
             agents_per_group,
             max_messages,
+            role_diversity,
         )
         .await?;
 
@@ -1589,11 +1621,7 @@ pub async fn start_research(
                 groups.truncate(num_groups);
             }
             for g in groups.iter_mut() {
-                if g.agents > agents_per_group {
-                    g.agents = agents_per_group;
-                }
-                // CLI-selected backend is authoritative for execution.
-                g.agent = Some(agent_type.to_string());
+                apply_group_runtime_controls(g, agents_per_group, agent_type, agent_mode);
             }
             strategy.execution.agent_count = groups.iter().map(|g| g.agents).sum();
         }
@@ -1609,11 +1637,7 @@ pub async fn start_research(
                     r.groups.truncate(num_groups);
                 }
                 for g in r.groups.iter_mut() {
-                    if g.agents > agents_per_group {
-                        g.agents = agents_per_group;
-                    }
-                    // CLI-selected backend is authoritative for execution.
-                    g.agent = Some(agent_type.to_string());
+                    apply_group_runtime_controls(g, agents_per_group, agent_type, agent_mode);
                 }
             }
             strategy.execution.agent_count = rounds.first()
@@ -1625,11 +1649,7 @@ pub async fn start_research(
                 root_groups.truncate(num_groups);
             }
             for g in root_groups.iter_mut() {
-                if g.agents > agents_per_group {
-                    g.agents = agents_per_group;
-                }
-                // CLI-selected backend is authoritative for execution.
-                g.agent = Some(agent_type.to_string());
+                apply_group_runtime_controls(g, agents_per_group, agent_type, agent_mode);
             }
             strategy.execution.agent_count = root_groups.iter().map(|g| g.agents).sum();
         }
