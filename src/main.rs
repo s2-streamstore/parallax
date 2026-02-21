@@ -210,6 +210,8 @@ async fn main() -> miette::Result<()> {
             timeout,
             agent,
             planner_agent,
+            agent_mode,
+            role_diversity,
             model,
         } => {
             research::start_research(
@@ -223,6 +225,8 @@ async fn main() -> miette::Result<()> {
                 timeout,
                 &agent,
                 planner_agent.as_deref(),
+                agent_mode,
+                role_diversity,
                 model.as_deref(),
                 &config,
                 cli.basin.as_deref(),
